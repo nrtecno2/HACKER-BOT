@@ -1,4 +1,4 @@
-python-telegram-bot==20.7
+pyTelegramBotAPI==4.16.0
 requests==2.31.0
 scapy==2.5.0
 pefile==2023.2.7
