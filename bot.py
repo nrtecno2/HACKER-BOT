@@ -1,15 +1,20 @@
+# ═══════════════════════════════════════════════════════════
+# 🛡️ OMEGA-BOT — CYBER FORTRESS (pyTelegramBotAPI)
+# ═══════════════════════════════════════════════════════════
+
 import os
 import logging
 import threading
 import socket
 import requests
 import sqlite3
+import time
 from datetime import datetime
 from flask import Flask, jsonify
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import telebot
+from telebot import types
 
-# ─── FLASK APP ───
+# ─── FLASK APP (Render Health Check) ───
 app = Flask(__name__)
 
 @app.route('/')
@@ -63,6 +68,9 @@ def init_db():
     conn.close()
 
 init_db()
+
+# ─── BOT INIT ───
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
 
 # ─── SCANNER CLASS ───
 class VulnerabilityScanner:
@@ -149,12 +157,22 @@ class Honeypot:
         thread.start()
         return {"status": "HONEYPOT STARTED", "port": port}
 
-# ─── TELEGRAM COMMANDS ───
+# ─── ADMIN CHECK DECORATOR ───
+def admin_only(func):
+    def wrapper(message):
+        if message.from_user.id not in ADMIN_IDS:
+            bot.reply_to(message, "⚠️ आपको OMEGA-BOT चलाने की अनुमति नहीं है।")
+            return
+        return func(message)
+    return wrapper
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = update.effective_user
+# ─── TELEGRAM HANDLERS ───
 
+@bot.message_handler(commands=['start'])
+@admin_only
+def start_command(message):
+    user_id = message.from_user.id
+    user = message.from_user
     conn = sqlite3.connect('omega_bot.db')
     c = conn.cursor()
     c.execute('''INSERT OR IGNORE INTO users (user_id, username, first_name, joined_at)
@@ -162,12 +180,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
               (user_id, user.username, user.first_name, datetime.now().isoformat()))
     conn.commit()
     conn.close()
-
-    if user_id not in ADMIN_IDS:
-        await update.message.reply_text("⚠️ आपको OMEGA-BOT चलाने की अनुमति नहीं है।")
-        return
-
-    await update.message.reply_text("""
+    bot.reply_to(message, """
 ╔══════════════════════════════════════════════════════╗
 ║ 🛡️ OMEGA-BOT — CYBER FORTRESS ACTIVE             ║
 ╚══════════════════════════════════════════════════════╝
@@ -188,36 +201,32 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🐉 OMEGA-BOT तैयार है — आज्ञा दें
 """)
 
-async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ अनुमति नहीं।")
+@bot.message_handler(commands=['scan'])
+@admin_only
+def scan_command(message):
+    args = message.text.split()
+    if len(args) < 2:
+        bot.reply_to(message, "🔹 /scan <IP> — जैसे: /scan 8.8.8.8")
         return
-    args = context.args
-    if not args:
-        await update.message.reply_text("🔹 /scan <IP> — जैसे: /scan 8.8.8.8")
-        return
-    target = args[0]
-    await update.message.reply_text(f"🔍 {target} का पोर्ट स्कैन शुरू...")
+    target = args[1]
+    bot.reply_to(message, f"🔍 {target} का पोर्ट स्कैन शुरू...")
     scanner = VulnerabilityScanner()
     open_ports = scanner.scan_network(target)
     if open_ports:
         response = f"✅ {target} पर खुले पोर्ट: {', '.join(map(str, open_ports))}"
     else:
         response = f"❌ {target} पर कोई पोर्ट नहीं खुला।"
-    await update.message.reply_text(response)
+    bot.reply_to(message, response)
 
-async def exploit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ अनुमति नहीं।")
+@bot.message_handler(commands=['exploit'])
+@admin_only
+def exploit_command(message):
+    args = message.text.split()
+    if len(args) < 3:
+        bot.reply_to(message, "🔹 /exploit <IP> <port> — जैसे: /exploit 8.8.8.8 22")
         return
-    args = context.args
-    if len(args) < 2:
-        await update.message.reply_text("🔹 /exploit <IP> <port> — जैसे: /exploit 8.8.8.8 22")
-        return
-    target = args[0]
-    port = int(args[1])
+    target = args[1]
+    port = int(args[2])
     scanner = VulnerabilityScanner()
     result = scanner.check_exploits(target, port)
     response = f"""
@@ -233,23 +242,21 @@ async def exploit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 [ OMEGA-BOT >> EXPLOIT CONFIRMED ]
 """
-    await update.message.reply_text(response)
+    bot.reply_to(message, response)
 
-async def trace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ अनुमति नहीं।")
+@bot.message_handler(commands=['trace'])
+@admin_only
+def trace_command(message):
+    args = message.text.split()
+    if len(args) < 2:
+        bot.reply_to(message, "🔹 /trace <IP> — जैसे: /trace 8.8.8.8")
         return
-    args = context.args
-    if not args:
-        await update.message.reply_text("🔹 /trace <IP> — जैसे: /trace 8.8.8.8")
-        return
-    ip = args[0]
-    await update.message.reply_text(f"📍 {ip} का लोकेशन ट्रेस कर रहा हूँ...")
+    ip = args[1]
+    bot.reply_to(message, f"📍 {ip} का लोकेशन ट्रेस कर रहा हूँ...")
     tracer = HackerTracer()
     location = tracer.trace_ip(ip)
     if "error" in location:
-        await update.message.reply_text("❌ IP ट्रेस विफल।")
+        bot.reply_to(message, "❌ IP ट्रेस विफल।")
         return
     response = f"""
 ╔══════════════════════════════════════════════════════╗
@@ -265,19 +272,17 @@ async def trace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 [ OMEGA-BOT >> ATTACKER IDENTIFIED ]
 """
-    await update.message.reply_text(response)
+    bot.reply_to(message, response)
 
-async def counter_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ अनुमति नहीं।")
+@bot.message_handler(commands=['counter'])
+@admin_only
+def counter_command(message):
+    args = message.text.split()
+    if len(args) < 2:
+        bot.reply_to(message, "🔹 /counter <IP> — जैसे: /counter 8.8.8.8")
         return
-    args = context.args
-    if not args:
-        await update.message.reply_text("🔹 /counter <IP> — जैसे: /counter 8.8.8.8")
-        return
-    target = args[0]
-    await update.message.reply_text(f"💀 {target} पर काउंटर-अटैक शुरू...")
+    target = args[1]
+    bot.reply_to(message, f"💀 {target} पर काउंटर-अटैक शुरू...")
     counter = CounterAttack()
     result = counter.ddos_counter(target)
     response = f"""
@@ -291,18 +296,16 @@ async def counter_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 [ OMEGA-BOT >> ATTACK NEUTRALIZED ]
 """
-    await update.message.reply_text(response)
+    bot.reply_to(message, response)
 
-async def honeypot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ अनुमति नहीं।")
-        return
-    args = context.args
-    port = int(args[0]) if args else 22
+@bot.message_handler(commands=['honeypot'])
+@admin_only
+def honeypot_command(message):
+    args = message.text.split()
+    port = int(args[1]) if len(args) > 1 else 22
     honeypot = Honeypot()
     result = honeypot.start_honeypot(port)
-    await update.message.reply_text(f"""
+    bot.reply_to(message, f"""
 🫳 HONEYPOT सक्रिय
 
 🔌 पोर्ट: {result['port']}
@@ -312,11 +315,9 @@ async def honeypot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 [ OMEGA-BOT >> HONEYPOT ACTIVE ]
 """)
 
-async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ अनुमति नहीं।")
-        return
+@bot.message_handler(commands=['status'])
+@admin_only
+def status_command(message):
     conn = sqlite3.connect('omega_bot.db')
     c = conn.cursor()
     c.execute('SELECT COUNT(*) FROM attacks')
@@ -344,56 +345,40 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 [ OMEGA-BOT >> STABLE ]
 """
-    await update.message.reply_text(response)
+    bot.reply_to(message, response)
 
-async def db_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ अनुमति नहीं।")
-        return
+@bot.message_handler(commands=['db'])
+@admin_only
+def db_command(message):
     conn = sqlite3.connect('omega_bot.db')
     c = conn.cursor()
     c.execute('SELECT * FROM attacks ORDER BY id DESC LIMIT 10')
     attacks = c.fetchall()
     conn.close()
     if not attacks:
-        await update.message.reply_text("📊 डेटाबेस में कोई अटैक नहीं।")
+        bot.reply_to(message, "📊 डेटाबेस में कोई अटैक नहीं।")
         return
     response = "📊 **LAST 10 ATTACKS**\n\n"
     for attack in attacks:
         response += f"🆔 {attack[0]} | {attack[3]} | {attack[1]} | {attack[2]}\n"
-    await update.message.reply_text(response)
+    bot.reply_to(message, response)
 
-async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⚠️ Unknown command. Use /start to see available commands.")
+@bot.message_handler(func=lambda m: True)
+def unknown_command(message):
+    bot.reply_to(message, "⚠️ Unknown command. Use /start to see available commands.")
 
-# ─── TELEGRAM BOT STARTER (यह thread start करता है) ───
+# ─── BOT POLLING THREAD ───
+def run_bot():
+    logger.info("🐉 OMEGA-BOT (telebot) चालू हो रहा है...")
+    bot.polling(none_stop=True)
 
-def run_telegram_bot():
-    if not BOT_TOKEN:
-        logger.error("❌ BOT_TOKEN not set!")
-        return
-    try:
-        application = Application.builder().token(BOT_TOKEN).build()
-        application.add_handler(CommandHandler("start", start_command))
-        application.add_handler(CommandHandler("scan", scan_command))
-        application.add_handler(CommandHandler("exploit", exploit_command))
-        application.add_handler(CommandHandler("trace", trace_command))
-        application.add_handler(CommandHandler("counter", counter_command))
-        application.add_handler(CommandHandler("honeypot", honeypot_command))
-        application.add_handler(CommandHandler("status", status_command))
-        application.add_handler(CommandHandler("db", db_command))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown_command))
-        logger.info("🐉 OMEGA-BOT चालू हो रहा है...")
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
-    except Exception as e:
-        logger.error(f"❌ Telegram bot error: {e}")
-
-# ─── 🔥 FIX: बोट थ्रेड Module Load होते ही स्टार्ट हो जाता है ───
-_bot_thread = threading.Thread(target=run_telegram_bot, daemon=True)
-_bot_thread.start()
-logger.info("✅ Telegram bot thread started.")
-
-# ─── FLASK APP RUN (gunicorn के लिए) ───
-# ध्यान दें: gunicorn `app` variable को इस्तेमाल करता है, यहाँ कोई `if __name__` नहीं।
-# इसलिए हम `app` को बिना run किये छोड़ते हैं — gunicorn खुद run करेगा।
+# ─── START BOT IN BACKGROUND ───
+if not os.environ.get("RENDER"):  # Local run
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
+    bot_thread.start()
+    logger.info("✅ Telegram bot thread started (local).")
+else:
+    # On Render, start after Flask app is ready
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
+    bot_thread.start()
+    logger.info("✅ Telegram bot thread started (Render).")
